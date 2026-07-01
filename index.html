@@ -5937,6 +5937,45 @@
             </div>
         </div>
     </div>
+
+    <!-- تعديل رسوم الكشف للمرضى -->
+    <div class="modal fade" id="editExamRevenueModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content glass-card" style="border-radius:18px;overflow:hidden">
+                <div class="modal-header" style="background:linear-gradient(135deg,#0ea5e9,#06b6d4);color:#fff">
+                    <h5 class="modal-title fw-bold"><i class="fas fa-edit me-2"></i>تعديل رسوم الكشف</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="editExamRevKey">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">نوع الكشف</label>
+                        <input type="text" class="form-control" id="editExamRevType" readonly style="background:#1e293b !important;color:#94a3b8 !important;border-color:rgba(255,255,255,0.08) !important;">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">رسوم الكشف <span style="color:var(--accent)">(جنيه)</span></label>
+                        <input type="number" class="form-control" id="editExamRevFee" min="0" inputmode="numeric">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">رسوم تحليل السكر <span style="color:var(--accent)">(جنيه)</span></label>
+                        <input type="number" class="form-control" id="editExamRevSugar" min="0" inputmode="numeric">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">رسوم رسم القلب <span style="color:var(--accent)">(جنيه)</span></label>
+                        <input type="number" class="form-control" id="editExamRevECG" min="0" inputmode="numeric">
+                    </div>
+                    <div class="text-center p-3 rounded-3" style="background:rgba(14,165,233,0.08);border:1px dashed rgba(14,165,233,0.3)">
+                        <span class="text-muted">الإجمالي: </span>
+                        <span id="editExamRevTotal" class="fw-bold" style="color:var(--accent);font-size:18px">0 ج</span>
+                    </div>
+                </div>
+                <div class="modal-footer" style="border-top:1px solid rgba(255,255,255,0.06)">
+                    <button class="btn btn-secondary" data-bs-dismiss="modal" style="border-radius:10px">إلغاء</button>
+                    <button class="btn-gradient" onclick="window.saveExamRevenue()" style="border-radius:10px;padding:10px 28px"><i class="fas fa-check me-1"></i>حفظ التعديلات</button>
+                </div>
+            </div>
+        </div>
+    </div>
     <div id="toastContainer" class="toast-container"></div>
 
     <!-- Online Bookings Notification Modal -->
@@ -6723,6 +6762,8 @@
                 if (localStorage.getItem('auto_login_enabled') === 'true') {
                     localStorage.setItem('clinic_session', JSON.stringify({ username, password }));
                 }
+                // Also always save the session so it's available if auto-login is toggled on later
+                localStorage.setItem('clinic_session', JSON.stringify({ username, password }));
                 document.getElementById('loginOverlay').style.display = 'none';
                 document.getElementById('mainContent').style.display = 'block';
                 initApp();
@@ -6808,17 +6849,23 @@
         window.saveAutoLoginSetting = async function (enabled) {
             if (enabled) {
                 localStorage.setItem('auto_login_enabled', 'true');
-                // Save current session
-                const username = document.getElementById('loginEmail')?.value || 'admin';
-                const password = document.getElementById('loginPassword')?.value || '';
-                if (password) {
-                    localStorage.setItem('clinic_session', JSON.stringify({ username, password }));
+                // Try to get password from current session or from the login fields
+                const savedSession = localStorage.getItem('clinic_session');
+                let currentPassword = savedSession ? JSON.parse(savedSession).password : null;
+                if (!currentPassword) {
+                    const pwField = document.getElementById('loginPassword');
+                    if (pwField && pwField.value) {
+                        currentPassword = pwField.value;
+                    }
                 }
-                showToast('✅ تم تفعيل الدخول التلقائي - المرة القادمة سيدخل مباشرة', 'success');
+                if (currentPassword) {
+                    localStorage.setItem('clinic_session', JSON.stringify({ username: 'admin', password: currentPassword }));
+                }
+                showToast('تم تفعيل الدخول التلقائي - المرة القادمة سيدخل مباشرة', 'success');
             } else {
                 localStorage.removeItem('auto_login_enabled');
                 localStorage.removeItem('clinic_session');
-                await signOut(firebaseAuth);
+                try { await signOut(firebaseAuth); } catch(e) { console.warn('signOut:', e); }
                 location.reload();
             }
         };
@@ -7947,10 +7994,10 @@
             // 4. Revenues Sheet
             const revenuesData = [];
             Object.values(window.allExaminations).forEach(e => {
-                const sugar = e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0;
-                const ecg = e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0;
+                const sugar = e.storedSugarFee !== undefined ? Number(e.storedSugarFee) : (e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0);
+                const ecg = e.storedEcgFee !== undefined ? Number(e.storedEcgFee) : (e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0);
                 const total = e.amount !== undefined ? Number(e.amount) : ((window.pricingTable[e.visitType] || 0) + sugar + ecg);
-                const fee = total - sugar - ecg;
+                const fee = e.storedExamFee !== undefined ? Number(e.storedExamFee) : (total - sugar - ecg);
                 revenuesData.push({
                     'التاريخ': e.examDate || '',
                     'اسم المريض / المصدر': window.allPatients[e.patientId]?.name || e.patientName || '',
@@ -7988,10 +8035,10 @@
             let items = [];
             Object.values(window.allExaminations).forEach(e => {
                 if (!activePatientIds.has(e.patientId)) return;
-                const sugar = e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0;
-                const ecg = e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0;
+                const sugar = e.storedSugarFee !== undefined ? Number(e.storedSugarFee) : (e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0);
+                const ecg = e.storedEcgFee !== undefined ? Number(e.storedEcgFee) : (e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0);
                 const total = e.amount !== undefined ? Number(e.amount) : ((window.pricingTable[e.visitType] || 0) + sugar + ecg);
-                const fee = total - sugar - ecg;
+                const fee = e.storedExamFee !== undefined ? Number(e.storedExamFee) : (total - sugar - ecg);
                 items.push({
                     type: 'كشف', date: e.examDate, patientName: e.patientName, visitType: e.visitType,
                     examFee: fee, sugarFee: sugar, ecgFee: ecg, total: total, isExam: true
@@ -10836,17 +10883,17 @@ function renderVisitTypeButtonsTab(containerId, hiddenInputId, types) {
         }
 
         function renderPatientRevenueTab(container, key, p) {
-            const exams = Object.values(window.allExaminations).filter(e => e.patientId === key);
+            const exams = Object.entries(window.allExaminations).filter(([k, e]) => e.patientId === key);
             const manual = Object.values(window.allManualRevenues).filter(m => m.patientId === key);
             let total = 0;
-            const allItems = [...exams.map(e => {
-                const sugar = e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0;
-                const ecg = e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0;
+            const allItems = [...exams.map(([ek, e]) => {
+                const sugar = e.storedSugarFee !== undefined ? Number(e.storedSugarFee) : (e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0);
+                const ecg = e.storedEcgFee !== undefined ? Number(e.storedEcgFee) : (e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0);
                 const totalAmt = e.amount !== undefined ? Number(e.amount) : ((window.pricingTable[e.visitType] || 0) + sugar + ecg);
-                const fee = totalAmt - sugar - ecg;
-                return { type: 'كشف', date: e.examDate, desc: e.visitType, fee, sugar, ecg, total: totalAmt };
+                const fee = e.storedExamFee !== undefined ? Number(e.storedExamFee) : (totalAmt - sugar - ecg);
+                return { type: 'كشف', date: e.examDate, desc: e.visitType, fee, sugar, ecg, total: totalAmt, examKey: ek };
             }), ...manual.map(m => ({
-                type: 'يدوي', date: m.date, desc: m.description, fee: 0, sugar: 0, ecg: 0, total: Number(m.amount)
+                type: 'يدوي', date: m.date, desc: m.description, fee: 0, sugar: 0, ecg: 0, total: Number(m.amount), examKey: null
             }))].sort((a, b) => b.date > a.date ? 1 : -1);
 
             if (allItems.length === 0) {
@@ -10856,7 +10903,8 @@ function renderVisitTypeButtonsTab(containerId, hiddenInputId, types) {
 
             const rows = allItems.map(item => {
                 total += item.total;
-                return `<tr><td>${item.date}</td><td>${item.desc}</td><td>${item.fee} ج</td><td>${item.sugar} ج</td><td>${item.ecg} ج</td><td class="fw-bold">${item.total} ج</td></tr>`;
+                const editBtn = item.examKey ? `<button class="btn-sm-action btn-edit-sm" onclick="window.openExamRevenueModal('${item.examKey}')" title="تعديل الرسوم"><i class="fas fa-edit"></i></button>` : '';
+                return `<tr><td>${item.date}</td><td>${item.desc}</td><td>${item.fee} ج</td><td>${item.sugar} ج</td><td>${item.ecg} ج</td><td class="fw-bold">${item.total} ج</td><td>${editBtn}</td></tr>`;
             }).join('');
 
             container.innerHTML = `
@@ -10866,7 +10914,7 @@ function renderVisitTypeButtonsTab(containerId, hiddenInputId, types) {
                 </div>
                 <div class="table-responsive rounded-4 border">
                     <table class="clinic-table m-0">
-                        <thead class="bg-light"><tr><th>التاريخ</th><th>البيان</th><th>كشف</th><th>سكر</th><th>رسم قلب</th><th>الإجمالي</th></tr></thead>
+                        <thead class="bg-light"><tr><th>التاريخ</th><th>البيان</th><th>كشف</th><th>سكر</th><th>رسم قلب</th><th>الإجمالي</th><th>إجراءات</th></tr></thead>
                         <tbody>${rows}</tbody>
                     </table>
                 </div>`;
@@ -11996,7 +12044,11 @@ function renderVisitTypeButtonsTab(containerId, hiddenInputId, types) {
             if (document.getElementById('stat-today-examinations')) document.getElementById('stat-today-examinations').textContent = examsToday.length;
             if (document.getElementById('stat-today-followups')) document.getElementById('stat-today-followups').textContent = followupsToday.length;
 
-            const calcRev = (exams) => exams.reduce((s, e) => s + (e.amount !== undefined ? Number(e.amount) : (window.pricingTable[e.visitType] || 0)) + (e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0) + (e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0), 0);
+            const calcRev = (exams) => exams.reduce((s, e) => {
+                const sf = e.storedSugarFee !== undefined ? Number(e.storedSugarFee) : (e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0);
+                const ef2 = e.storedEcgFee !== undefined ? Number(e.storedEcgFee) : (e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0);
+                return s + (e.amount !== undefined ? Number(e.amount) : (window.pricingTable[e.visitType] || 0) + sf + ef2);
+            }, 0);
             const manualRevToday = mList.filter(([k, m]) => m.date === today).reduce((s, [k, m]) => s + Number(m.amount || 0), 0);
             const totalRevToday = calcRev(examsToday) + manualRevToday;
             if (document.getElementById('stat-revenue')) document.getElementById('stat-revenue').textContent = totalRevToday + ' ج';
@@ -12091,10 +12143,10 @@ function renderVisitTypeButtonsTab(containerId, hiddenInputId, types) {
 
             examsToday.forEach(e => {
                 const isCheckup = e.visitType && e.visitType.includes('كشف');
-                const sugar = e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0;
-                const ecg = e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0;
+                const sugar = e.storedSugarFee !== undefined ? Number(e.storedSugarFee) : (e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0);
+                const ecg = e.storedEcgFee !== undefined ? Number(e.storedEcgFee) : (e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0);
                 const totalAmt = e.amount !== undefined ? Number(e.amount) : ((window.pricingTable[e.visitType] || 100) + sugar + ecg);
-                const ef = totalAmt - sugar - ecg;
+                const ef = e.storedExamFee !== undefined ? Number(e.storedExamFee) : (totalAmt - sugar - ecg);
                 if (isCheckup) { checkupSum += ef; checkupCount++; } else { followupSum += ef; followupCount++; }
                 if (sugar > 0) { sugarSum += sugar; sugarCount++; }
                 if (ecg > 0) { ecgSum += ecg; ecgCount++; }
@@ -12140,10 +12192,10 @@ function renderVisitTypeButtonsTab(containerId, hiddenInputId, types) {
 
             examsMonth.forEach(e => {
                 const isCheckup = e.visitType && e.visitType.includes('كشف');
-                const sugar = e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0;
-                const ecg = e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0;
+                const sugar = e.storedSugarFee !== undefined ? Number(e.storedSugarFee) : (e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0);
+                const ecg = e.storedEcgFee !== undefined ? Number(e.storedEcgFee) : (e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0);
                 const totalAmt = e.amount !== undefined ? Number(e.amount) : ((window.pricingTable[e.visitType] || 100) + sugar + ecg);
-                const ef = totalAmt - sugar - ecg;
+                const ef = e.storedExamFee !== undefined ? Number(e.storedExamFee) : (totalAmt - sugar - ecg);
                 if (isCheckup) { checkupSum += ef; checkupCount++; } else { followupSum += ef; followupCount++; }
                 if (sugar > 0) { sugarSum += sugar; sugarCount++; }
                 if (ecg > 0) { ecgSum += ecg; ecgCount++; }
@@ -12223,7 +12275,11 @@ function renderVisitTypeButtonsTab(containerId, hiddenInputId, types) {
             const activePatientIds = new Set(Object.keys(window.allPatients));
             const todayExams = Object.values(window.allExaminations).filter(e => e.examDate === today && activePatientIds
                 .has(e.patientId));
-            const calcRev = (exams) => exams.reduce((s, e) => s + (e.amount !== undefined ? Number(e.amount) : ((window.pricingTable[e.visitType] || 0) + (e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0) + (e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0))), 0);
+            const calcRev = (exams) => exams.reduce((s, e) => {
+                const sf = e.storedSugarFee !== undefined ? Number(e.storedSugarFee) : (e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0);
+                const ef2 = e.storedEcgFee !== undefined ? Number(e.storedEcgFee) : (e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0);
+                return s + (e.amount !== undefined ? Number(e.amount) : ((window.pricingTable[e.visitType] || 0) + sf + ef2));
+            }, 0);
             document.getElementById('rev-today').textContent = calcRev(todayExams) + ' ج';
             const now = new Date();
             const startW = new Date(now);
@@ -12254,10 +12310,10 @@ function renderVisitTypeButtonsTab(containerId, hiddenInputId, types) {
             let items = [];
             Object.values(window.allExaminations).forEach(e => {
                 if (!activePatientIds.has(e.patientId)) return;
-                const total = e.amount !== undefined ? Number(e.amount) : ((window.pricingTable[e.visitType] || 0) + (e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0) + (e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0));
-                const sf = e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0;
-                const ef2 = e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0;
-                const ef = total - sf - ef2;
+                const sf = e.storedSugarFee !== undefined ? Number(e.storedSugarFee) : (e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0);
+                const ef2 = e.storedEcgFee !== undefined ? Number(e.storedEcgFee) : (e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0);
+                const total = e.amount !== undefined ? Number(e.amount) : ((window.pricingTable[e.visitType] || 0) + sf + ef2);
+                const ef = e.storedExamFee !== undefined ? Number(e.storedExamFee) : (total - sf - ef2);
                 items.push({
                     type: 'كشف', date: e.examDate, patientName: e.patientName, visitType: e.visitType,
                     examFee: ef, sugarFee: sf, ecgFee: ef2, total: total, key: Object.keys(window.allExaminations).find(k =>
@@ -12341,7 +12397,7 @@ function renderVisitTypeButtonsTab(containerId, hiddenInputId, types) {
                 tS += it.sugarFee;
                 tECG += it.ecgFee;
                 g += it.total;
-                return `<tr><td>${i + 1}</td><td><strong>${it.patientName}</strong></td><td>${it.date}</td><td>${it.visitType}</td><td>${it.examFee} ج</td><td>${it.sugarFee} ج</td><td>${it.ecgFee} ج</td><td><strong>${it.total} ج</strong></td><td><div class="d-flex gap-1"><button class="btn-sm-action btn-edit-sm" onclick="window.openEditRevenueModal('${it.key}',${it.isExam})" title="تعديل"><i class="fas fa-edit"></i></button><button class="btn-sm-action btn-delete-sm" onclick="window.deleteRevenueItem('${it.key}',${it.isExam})" title="حذف"><i class="fas fa-trash"></i></button></div></td></tr>`;
+                return `<tr><td>${i + 1}</td><td><strong>${it.patientName}</strong></td><td>${it.date}</td><td>${it.visitType}</td><td>${it.examFee} ج</td><td>${it.sugarFee} ج</td><td>${it.ecgFee} ج</td><td><strong>${it.total} ج</strong></td><td><div class="d-flex gap-1">${it.isExam ? `<button class="btn-sm-action btn-edit-sm" onclick="window.openExamRevenueModal('${it.key}')" title="تعديل الرسوم"><i class="fas fa-edit"></i></button>` : `<button class="btn-sm-action btn-edit-sm" onclick="window.openEditRevenueModal('${it.key}',false)" title="تعديل"><i class="fas fa-edit"></i></button>`}<button class="btn-sm-action btn-delete-sm" onclick="window.deleteRevenueItem('${it.key}',${it.isExam})" title="حذف"><i class="fas fa-trash"></i></button></div></td></tr>`;
             }).join('');
             
             footer.innerHTML =
@@ -12408,6 +12464,75 @@ function renderVisitTypeButtonsTab(containerId, hiddenInputId, types) {
                 showToast('خطأ في الحفظ', 'error');
             }
         };
+
+        // ===== فتح مودال تعديل رسوم الكشف =====
+        window.openExamRevenueModal = function (examKey) {
+            const ex = window.allExaminations[examKey];
+            if (!ex) return;
+            document.getElementById('editExamRevKey').value = examKey;
+            document.getElementById('editExamRevType').value = ex.visitType || 'كشف';
+            const storedAmount = ex.amount !== undefined ? Number(ex.amount) : 0;
+            const sugarFee = ex.storedSugarFee !== undefined ? Number(ex.storedSugarFee) : (ex.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0);
+            const ecgFee = ex.storedEcgFee !== undefined ? Number(ex.storedEcgFee) : (ex.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0);
+            let baseFee;
+            if (ex.storedExamFee !== undefined) {
+                baseFee = Number(ex.storedExamFee);
+            } else if (storedAmount > 0) {
+                baseFee = storedAmount - sugarFee - ecgFee;
+            } else {
+                baseFee = window.pricingTable[ex.visitType] || 0;
+            }
+            document.getElementById('editExamRevFee').value = baseFee;
+            document.getElementById('editExamRevSugar').value = sugarFee;
+            document.getElementById('editExamRevECG').value = ecgFee;
+            const total = baseFee + sugarFee + ecgFee;
+            document.getElementById('editExamRevTotal').textContent = total + ' ج';
+            showModal('editExamRevenueModal');
+            const updateTotal = () => {
+                const f = parseInt(document.getElementById('editExamRevFee').value) || 0;
+                const s = parseInt(document.getElementById('editExamRevSugar').value) || 0;
+                const c = parseInt(document.getElementById('editExamRevECG').value) || 0;
+                document.getElementById('editExamRevTotal').textContent = (f + s + c) + ' ج';
+            };
+            document.getElementById('editExamRevFee').oninput = updateTotal;
+            document.getElementById('editExamRevSugar').oninput = updateTotal;
+            document.getElementById('editExamRevECG').oninput = updateTotal;
+        };
+
+        // ===== حفظ تعديل رسوم الكشف =====
+        window.saveExamRevenue = async function () {
+            const key = document.getElementById('editExamRevKey').value;
+            if (!key) return;
+            const ex = window.allExaminations[key];
+            if (!ex) return;
+            const examFee = parseInt(document.getElementById('editExamRevFee').value) || 0;
+            const sugarFee = parseInt(document.getElementById('editExamRevSugar').value) || 0;
+            const ecgFee = parseInt(document.getElementById('editExamRevECG').value) || 0;
+            const totalAmount = examFee + sugarFee + ecgFee;
+            try {
+                const updatedData = {
+                    amount: totalAmount,
+                    storedExamFee: examFee,
+                    storedSugarFee: sugarFee,
+                    storedEcgFee: ecgFee,
+                    sugarTest: sugarFee > 0,
+                    ecgTest: ecgFee > 0
+                };
+                await db.update(ref(firebaseDb, 'examinations/' + key), updatedData);
+                window.allExaminations[key] = { ...window.allExaminations[key], ...updatedData };
+                bootstrap.Modal.getInstance(document.getElementById('editExamRevenueModal'))?.hide();
+                showToast('تم تعديل الرسوم بنجاح ✓', 'success');
+                if (typeof updateRevenuePage === 'function') updateRevenuePage();
+                if (window.globalSelectedPatientKey && typeof renderPatientDetailContent === 'function') {
+                    renderPatientDetailContent('tab-revenue');
+                }
+                if (typeof updateDashboard === 'function') updateDashboard();
+            } catch (e) {
+                console.error(e);
+                showToast('خطأ في الحفظ', 'error');
+            }
+        };
+
         window.filterRevenuePeriod = function () {
             document.getElementById('revFilterDate').value = '';
             updateRevenuePage();
@@ -12594,9 +12719,9 @@ function renderVisitTypeButtonsTab(containerId, hiddenInputId, types) {
                 currentReportTitle = "تقرير الإيرادات";
                 const items = [];
                 Object.values(window.allExaminations).filter(e => isDateInRange(e.examDate)).forEach(e => {
-                    const ef = e.amount !== undefined ? Number(e.amount) : (window.pricingTable[e.visitType] || 0);
-                    const sf = e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0;
-                    const ef2 = e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0;
+                    const sf = e.storedSugarFee !== undefined ? Number(e.storedSugarFee) : (e.sugarTest ? (window.pricingTable['تحليل سكر'] || 15) : 0);
+                    const ef2 = e.storedEcgFee !== undefined ? Number(e.storedEcgFee) : (e.ecgTest ? (window.pricingTable['رسم قلب'] || 50) : 0);
+                    const ef = e.storedExamFee !== undefined ? Number(e.storedExamFee) : (e.amount !== undefined ? Number(e.amount) - sf - ef2 : (window.pricingTable[e.visitType] || 0));
                     items.push({ date: e.examDate, patient: window.allPatients[e.patientId]?.name, type: e.visitType, amount: ef + sf + ef2 });
                 });
                 Object.values(window.allManualRevenues).filter(m => isDateInRange(m.date)).forEach(m => {
